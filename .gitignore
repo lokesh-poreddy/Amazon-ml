@@ -1,0 +1,65 @@
+# ============================================================
+# Amazon ML Challenge 2026 — .gitignore
+# ============================================================
+
+# Data (NEVER commit competition data)
+data/raw/
+data/interim/
+data/processed/
+*.csv
+*.parquet
+*.json
+*.jsonl
+!logs/experiments.csv
+!submission/sanity_report.txt
+!data/README.md
+
+# Models and artifacts
+artifacts/models/
+artifacts/features/
+artifacts/predictions/
+artifacts/encoders/
+embedding_cache/
+
+# Submission (commit only the FINAL one explicitly)
+submission/final_submission.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Virtual environments
+.venv/
+venv/
+env/
+*.conda/
+
+# Secrets
+.env
+*.env
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# IDEs
+.vscode/
+.idea/
+*.code-workspace
+
+# Logs (keep structure, not content)
+logs/runs/
+*.log

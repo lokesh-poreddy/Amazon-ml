@@ -1,0 +1,175 @@
+# ============================================================
+# Amazon ML Challenge 2026 — Master Configuration
+# ============================================================
+# Fill in the UNKNOWN fields after the dataset is released.
+# DO NOT hard-code competition-specific values before Day 1.
+# ============================================================
+
+project:
+  name: "amazon-ml-2026"
+  seed: 42
+  debug: false               # true = small sample, fast iterations
+  final_run: false           # true = full pipeline, no sampling
+  version: "v0.1.0"
+
+# ----------------------------------------------------------
+# DATA (fill after dataset is released on Day 1)
+# ----------------------------------------------------------
+data:
+  root_dir: "data/raw"
+  train_path: null           # e.g., "data/raw/train.csv"
+  test_path: null            # e.g., "data/raw/test.csv"
+  target_column: null        # e.g., "entity_value"
+  id_column: null            # e.g., "index"
+  image_dir: null            # e.g., "data/raw/images/"
+  cache_dir: "embedding_cache"
+  debug_sample: 2000         # rows used in debug mode
+  random_sample_seed: 42
+
+# ----------------------------------------------------------
+# TASK (fill after problem statement is released)
+# ----------------------------------------------------------
+task:
+  type: null                 # regression | binary | multiclass | extraction | ranking
+  metric: null               # smape | mae | rmse | f1 | auc | accuracy | ...
+  direction: null            # minimize | maximize
+  prediction_clip_min: null
+  prediction_clip_max: null
+
+# ----------------------------------------------------------
+# VALIDATION
+# ----------------------------------------------------------
+validation:
+  strategy: "kfold"          # kfold | stratified | group | timeseries | holdout
+  folds: 5
+  shuffle: true
+  seed: 42
+  group_column: null         # required if strategy=group
+  time_column: null          # required if strategy=timeseries
+  holdout_fraction: 0.2      # used if strategy=holdout
+
+# ----------------------------------------------------------
+# PREPROCESSING
+# ----------------------------------------------------------
+preprocessing:
+  numeric_imputer: "median"         # median | mean | constant | none
+  categorical_imputer: "constant"   # constant | most_frequent | none
+  categorical_fill_value: "MISSING"
+  numeric_fill_value: -1
+  scale_numeric: false       # usually not needed for tree models
+  clip_quantile_outliers: false
+  clip_lower: 0.001
+  clip_upper: 0.999
+
+# ----------------------------------------------------------
+# FEATURES
+# ----------------------------------------------------------
+features:
+  version: "v0"
+  text_columns: []           # fill after EDA
+  categorical_columns: []
+  numeric_columns: []
+  datetime_columns: []
+  image_url_column: null
+  image_path_column: null
+  use_text_tfidf: false
+  use_text_embeddings: false
+  use_image_embeddings: false
+  tfidf_max_features: 50000
+  tfidf_ngram_range: [1, 2]
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  image_encoder: "openai/clip-vit-base-patch32"
+
+# ----------------------------------------------------------
+# MODELS
+# ----------------------------------------------------------
+models:
+  baseline: "lgbm"           # lgbm | xgb | catboost | linear | dummy
+
+  lgbm:
+    n_estimators: 1000
+    learning_rate: 0.05
+    num_leaves: 127
+    max_depth: -1
+    min_child_samples: 20
+    subsample: 0.8
+    colsample_bytree: 0.8
+    reg_alpha: 0.1
+    reg_lambda: 1.0
+    verbose: -1
+    n_jobs: -1
+    early_stopping_rounds: 100
+
+  xgb:
+    n_estimators: 1000
+    learning_rate: 0.05
+    max_depth: 6
+    subsample: 0.8
+    colsample_bytree: 0.8
+    reg_alpha: 0.1
+    reg_lambda: 1.0
+    eval_metric: "rmse"
+    early_stopping_rounds: 100
+    verbosity: 0
+
+  catboost:
+    iterations: 1000
+    learning_rate: 0.05
+    depth: 6
+    l2_leaf_reg: 3.0
+    early_stopping_rounds: 100
+    verbose: 0
+
+  linear:
+    alpha: 1.0
+    max_iter: 1000
+
+# ----------------------------------------------------------
+# TRAINING
+# ----------------------------------------------------------
+training:
+  batch_size: 64             # for neural models
+  max_epochs: 50
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  warmup_steps: 100
+  fp16: false
+  gradient_clip: 1.0
+  save_best: true
+  patience: 5                # early stopping for neural models
+
+# ----------------------------------------------------------
+# ENSEMBLE
+# ----------------------------------------------------------
+ensemble:
+  enabled: false
+  method: "weighted_avg"     # weighted_avg | rank_avg | stacking | blending
+  correlation_threshold: 0.98  # reject model if OOF correlation > threshold
+
+# ----------------------------------------------------------
+# SUBMISSION
+# ----------------------------------------------------------
+submission:
+  output_dir: "submission"
+  filename: "final_submission.csv"
+  id_column: null            # fill from task spec
+  prediction_column: null    # fill from task spec
+  round_digits: null         # set if predictions need rounding
+
+# ----------------------------------------------------------
+# LOGGING
+# ----------------------------------------------------------
+logging:
+  level: "INFO"              # DEBUG | INFO | WARNING | ERROR
+  log_dir: "logs"
+  experiments_csv: "logs/experiments.csv"
+
+# ----------------------------------------------------------
+# PATHS (derived — usually do not edit)
+# ----------------------------------------------------------
+artifacts:
+  models_dir: "artifacts/models"
+  features_dir: "artifacts/features"
+  predictions_dir: "artifacts/predictions"
+  encoders_dir: "artifacts/encoders"
+  reports_dir: "artifacts/reports"
