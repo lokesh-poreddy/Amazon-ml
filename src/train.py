@@ -46,6 +46,7 @@ class FoldResult:
     n_val: int
     elapsed_seconds: float
     model_path: Optional[str] = None
+    best_iteration: Optional[int] = None
 
 
 @dataclass
@@ -63,6 +64,7 @@ class TrainingResult:
     cv_mean: float
     cv_std: float
     total_elapsed: float
+    suggested_final_n_estimators: Optional[int] = None
     config_snapshot: Dict[str, Any] = field(default_factory=dict)
 
     def summary(self) -> str:
@@ -165,8 +167,9 @@ def cross_validate(
 
     y_all = df[target_col].values
     n = len(df)
-    oof_preds = np.zeros(n, dtype=np.float64)
+    oof_preds = None  # Lazy init to handle (N, K) multiclass shape
     oof_idx   = np.zeros(n, dtype=np.int64)
+    validation_count = np.zeros(n, dtype=np.int32)
     fold_results: List[FoldResult] = []
 
     t_start = time.perf_counter()
@@ -203,7 +206,7 @@ def cross_validate(
         # ── Predict ───────────────────────────────────────────────
         if predict_proba and task_type != "regression":
             preds = model.predict_proba(X_val)
-            if preds is not None and preds.ndim == 2:
+            if task_type == "binary" and preds is not None and preds.ndim == 2:
                 preds = preds[:, 1]  # binary: take positive class
         else:
             preds = model.predict(X_val)
@@ -221,8 +224,15 @@ def cross_validate(
         )
 
         # ── Store OOF ─────────────────────────────────────────────
+        if oof_preds is None:
+            if preds.ndim == 1:
+                oof_preds = np.zeros(n, dtype=preds.dtype)
+            else:
+                oof_preds = np.zeros((n, preds.shape[1]), dtype=preds.dtype)
+                
         oof_preds[si.val_idx] = preds
         oof_idx[si.val_idx]   = si.val_idx
+        validation_count[si.val_idx] += 1
 
         # ── Save model ────────────────────────────────────────────
         model_path = None
@@ -231,6 +241,16 @@ def cross_validate(
             model_path = str(models_dir / f"fold_{fold}.pkl")
             model.save(model_path)
 
+        # ── Extract best iteration ────────────────────────────────
+        best_iter = None
+        if hasattr(model, "_model") and model._model is not None:
+            if hasattr(model._model, "best_iteration_"):
+                best_iter = model._model.best_iteration_
+            elif hasattr(model._model, "best_iteration"):
+                best_iter = model._model.best_iteration
+            elif hasattr(model._model, "get_best_iteration"):
+                best_iter = model._model.get_best_iteration()
+
         fold_results.append(FoldResult(
             fold=fold,
             val_score=score,
@@ -238,16 +258,29 @@ def cross_validate(
             n_val=len(val_df),
             elapsed_seconds=elapsed,
             model_path=model_path,
+            best_iteration=best_iter,
         ))
 
         del model, X_train, X_val, train_df, val_df
         gc.collect()
 
     # ── Aggregate ─────────────────────────────────────────────────
+    if np.any(validation_count != 1):
+        missing = np.sum(validation_count == 0)
+        duplicates = np.sum(validation_count > 1)
+        # Note: TimeSeriesSplit intentionally leaves out early rows from validation
+        if not any(s.strategy == "timeseries" for s in splits):
+            raise RuntimeError(f"OOF coverage violation: {missing} rows missed, {duplicates} rows predicted multiple times. Every row must be in exactly one validation fold.")
+        else:
+            logger.warning("OOF coverage: %d rows missed (expected for TimeSeriesSplit).", missing)
+
     scores = [fr.val_score for fr in fold_results]
     cv_mean = float(np.mean(scores))
     cv_std  = float(np.std(scores))
     total_elapsed = time.perf_counter() - t_start
+    
+    iters = [fr.best_iteration for fr in fold_results if fr.best_iteration is not None]
+    suggested_n_estimators = int(round(np.median(iters) * 1.05)) if iters else None
 
     result = TrainingResult(
         experiment_id=experiment_id,
@@ -261,6 +294,7 @@ def cross_validate(
         cv_mean=cv_mean,
         cv_std=cv_std,
         total_elapsed=total_elapsed,
+        suggested_final_n_estimators=suggested_n_estimators,
     )
 
     logger.info("\n%s\n%s", "=" * 55, result.summary())
@@ -279,6 +313,7 @@ def train_final_model(
     task_type: str = "regression",
     model_kwargs: Optional[Dict[str, Any]] = None,
     save_path: Optional[str] = None,
+    n_estimators: Optional[int] = None,
 ) -> BaseModel:
     """
     Train a single model on the FULL training dataset.
@@ -309,6 +344,15 @@ def train_final_model(
     else:
         drop_cols = [c for c in [target_col] if c in df.columns]
         X = df.drop(columns=drop_cols)
+
+    if n_estimators is None:
+        logger.warning("train_final_model called without n_estimators! Model may overfit or underfit. Use result.suggested_final_n_estimators.")
+    else:
+        model_params = model_params or {}
+        if model_name.lower() in ("catboost",):
+            model_params["iterations"] = n_estimators
+        else:
+            model_params["n_estimators"] = n_estimators
 
     model = build_model(
         model_name,

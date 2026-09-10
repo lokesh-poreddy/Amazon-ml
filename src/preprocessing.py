@@ -49,11 +49,15 @@ class TargetEncoder(BaseEstimator, TransformerMixin):
     """
     Mean-target encoding with additive smoothing.
 
-    Smoothing blends the within-group mean with the global mean,
-    reducing variance for rare categories.
+    LEAKAGE-SAFE DESIGN:
+      - fit()          → compute group statistics from training data (for val/test)
+      - transform()    → apply fit statistics (safe for val and test)
+      - fit_transform() → Leave-One-Out (LOO) encoding for train rows.
+                          Each row's own target is EXCLUDED from its group
+                          statistic, so there is no self-information leakage.
 
-    IMPORTANT: This must be fitted ONLY on the training portion
-    within each CV fold. Never fit on validation rows.
+    The LOO design means that even when called on training data, a row's
+    own target value does not contribute to the encoding of that row.
 
     Parameters
     ----------
@@ -76,10 +80,15 @@ class TargetEncoder(BaseEstimator, TransformerMixin):
         self.handle_unknown = handle_unknown
         self._global_mean: float = 0.0
         self._mapping: Dict[str, Dict] = {}
+        self._count_mapping: Dict[str, Dict] = {}
+        self._sum_mapping: Dict[str, Dict] = {}
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "TargetEncoder":
         """
         Fit on training data only.
+
+        Computes group means used for encoding validation and test rows.
+        NOT used for training row encoding (see fit_transform).
 
         Parameters
         ----------
@@ -90,21 +99,32 @@ class TargetEncoder(BaseEstimator, TransformerMixin):
         """
         self._global_mean = float(y.mean())
         self._mapping = {}
+        self._count_mapping = {}
+        self._sum_mapping = {}
 
         for col in X.columns:
-            stats = (
+            grp = (
                 pd.concat([X[[col]], y.rename("__target__")], axis=1)
                 .groupby(col)["__target__"]
-                .agg(["count", "mean"])
+                .agg(["count", "mean", "sum"])
             )
-            smoother = 1 / (1 + np.exp(-(stats["count"] - self.min_samples_leaf) / self.smoothing))
-            stats["encoded"] = smoother * stats["mean"] + (1 - smoother) * self._global_mean
-            self._mapping[col] = stats["encoded"].to_dict()
+            smoother = 1 / (
+                1 + np.exp(-(grp["count"] - self.min_samples_leaf) / self.smoothing)
+            )
+            grp["encoded"] = smoother * grp["mean"] + (1 - smoother) * self._global_mean
+            self._mapping[col]       = grp["encoded"].to_dict()
+            self._count_mapping[col] = grp["count"].to_dict()
+            self._sum_mapping[col]   = grp["sum"].to_dict()
 
         return self
 
     def transform(self, X: pd.DataFrame) -> np.ndarray:
-        """Apply encoding, using global mean for unseen categories."""
+        """
+        Apply encoding using fit statistics.
+
+        Use for VALIDATION and TEST rows only.
+        For training rows, use fit_transform() which applies LOO.
+        """
         result = np.zeros((len(X), len(X.columns)), dtype=np.float32)
         for i, col in enumerate(X.columns):
             result[:, i] = (
@@ -116,7 +136,47 @@ class TargetEncoder(BaseEstimator, TransformerMixin):
         return result
 
     def fit_transform(self, X: pd.DataFrame, y: pd.Series = None) -> np.ndarray:  # type: ignore
-        return self.fit(X, y).transform(X)
+        """
+        Leave-One-Out (LOO) target encoding for TRAINING rows.
+
+        For each row i in group g:
+          - group sum   = sum(y for all rows in g)
+          - group count = count(rows in g)
+          - LOO mean    = (group_sum - y_i) / (group_count - 1)
+          - Smoothed    = blend(LOO_mean, global_mean)
+
+        This eliminates the self-leakage that occurs when a row's own
+        target contributes to its group encoding statistic.
+        """
+        self.fit(X, y)
+        y_arr = np.asarray(y, dtype=np.float64)
+        result = np.zeros((len(X), len(X.columns)), dtype=np.float32)
+
+        for i, col in enumerate(X.columns):
+            col_vals = X[col].values
+            encoded  = np.full(len(X), self._global_mean, dtype=np.float64)
+
+            for j, cat in enumerate(col_vals):
+                total_sum   = self._sum_mapping[col].get(cat, 0.0)
+                total_count = self._count_mapping[col].get(cat, 0)
+
+                if total_count > 1:
+                    loo_sum   = total_sum - y_arr[j]
+                    loo_count = total_count - 1
+                    loo_mean  = loo_sum / loo_count
+                else:
+                    # Singleton: fall back to global mean (safest option)
+                    loo_mean = self._global_mean
+
+                smoother = 1 / (
+                    1 + np.exp(-(total_count - self.min_samples_leaf) / self.smoothing)
+                )
+                encoded[j] = smoother * loo_mean + (1 - smoother) * self._global_mean
+
+            result[:, i] = encoded.astype(np.float32)
+
+        return result
+
 
 
 # ─────────────────────────────────────────────────────────────────

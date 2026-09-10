@@ -281,21 +281,31 @@ def check_final_package(verbose: bool = True) -> bool:
         except Exception as exc:
             checks.append((f"import {mod}", False, str(exc)))
 
-    # ── 2. Configuration ─────────────────────────────────────────
+    # ── 2. Configuration & TaskSpec ──────────────────────────────
     config_path = PROJECT_ROOT / "configs" / "config.yaml"
     checks.append((
         "configs/config.yaml exists",
         config_path.exists(),
         "" if config_path.exists() else str(config_path),
     ))
+    try:
+        from src.config import load_config
+        cfg = load_config()
+        _ = cfg.task.direction
+        checks.append(("TaskSpec validates (direction set)", True, ""))
+    except Exception as exc:
+        checks.append(("TaskSpec validates", False, str(exc)))
 
-    # ── 3. README ────────────────────────────────────────────────
+    # ── 3. README & requirements ─────────────────────────────────
     readme = PROJECT_ROOT / "README.md"
     checks.append(("README.md exists", readme.exists(), ""))
-
-    # ── 4. requirements.txt ──────────────────────────────────────
     req = PROJECT_ROOT / "requirements.txt"
     checks.append(("requirements.txt exists", req.exists(), ""))
+
+    # ── 4. Artifacts ─────────────────────────────────────────────
+    models_dir = PROJECT_ROOT / "artifacts" / "models"
+    has_models = models_dir.exists() and any(models_dir.glob("**/*.pkl"))
+    checks.append(("Final models exist", has_models, "No .pkl found in artifacts/models/"))
 
     # ── 5. Submission file ───────────────────────────────────────
     sub_dir = PROJECT_ROOT / "submission"
@@ -311,15 +321,42 @@ def check_final_package(verbose: bool = True) -> bool:
             checks.append(("submission has rows", has_rows, ""))
             no_nan = not sub_df.isnull().values.any()
             checks.append(("submission has no NaN", no_nan, ""))
-            numeric_cols = sub_df.select_dtypes(include=[np.number]).columns
-            no_inf = not np.isinf(sub_df[numeric_cols].values).any() if len(numeric_cols) else True
-            checks.append(("submission has no Inf", no_inf, ""))
+            
+            pred_cols = [c for c in sub_df.columns if 'cfg' not in locals() or c != cfg.task.id_column]
+            if len(pred_cols) > 0:
+                pred_col = pred_cols[0]
+                is_numeric = pd.api.types.is_numeric_dtype(sub_df[pred_col])
+                checks.append(("prediction dtype is numeric", is_numeric, str(sub_df[pred_col].dtype)))
+                if is_numeric:
+                    no_inf = not np.isinf(sub_df[pred_col].values).any()
+                    checks.append(("submission has no Inf", no_inf, ""))
         except Exception as exc:
             checks.append(("submission readable", False, str(exc)))
 
-    # ── 6. Tests ─────────────────────────────────────────────────
+    # ── 6. Zip Secrets Check ─────────────────────────────────────
+    zip_files = list(sub_dir.glob("*.zip")) if sub_dir.exists() else []
+    if zip_files:
+        import zipfile
+        zip_path = zip_files[-1]
+        try:
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                names = zf.namelist()
+                has_secrets = any(n.endswith(".env") or "secrets" in n.lower() or "credentials" in n.lower() for n in names)
+                checks.append(("no secrets in submission zip", not has_secrets, "Found potential secrets!"))
+        except Exception as e:
+            checks.append(("submission zip readable", False, str(e)))
+
+    # ── 7. Tests ─────────────────────────────────────────────────
     tests_dir = PROJECT_ROOT / "tests"
     checks.append(("tests/ directory exists", tests_dir.exists(), ""))
+    
+    import subprocess
+    try:
+        res = subprocess.run(["pytest", str(tests_dir)], capture_output=True, text=True)
+        passed = res.returncode == 0
+        checks.append(("pytest run check", passed, "Tests failed" if not passed else ""))
+    except Exception as e:
+        checks.append(("pytest run check", False, str(e)))
 
     # ── REPORT ───────────────────────────────────────────────────
     all_pass = all(passed for _, passed, _ in checks)

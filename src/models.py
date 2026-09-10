@@ -151,6 +151,7 @@ class DummyModel(BaseModel):
             vals, counts = np.unique(y, return_counts=True)
             self._value = float(vals[np.argmax(counts)])
         logger.info("DummyModel (%s): value = %.4f", self.strategy, self._value)
+        self._model = self
         return self
 
     def _predict(self, X) -> np.ndarray:
@@ -188,8 +189,10 @@ class LightGBMModel(BaseModel):
         params: Optional[Dict[str, Any]] = None,
         task_type: str = "regression",
         early_stopping_rounds: int = 100,
+        seed: int = 42,
     ) -> None:
         merged = {**self._DEFAULT_PARAMS, **(params or {})}
+        merged["random_state"] = seed
         super().__init__(merged)
         self.name = "lgbm"
         self.task_type = task_type
@@ -264,8 +267,10 @@ class XGBoostModel(BaseModel):
         params: Optional[Dict[str, Any]] = None,
         task_type: str = "regression",
         early_stopping_rounds: int = 100,
+        seed: int = 42,
     ) -> None:
         merged = {**self._DEFAULT_PARAMS, **(params or {})}
+        merged["random_state"] = seed
         super().__init__(merged)
         self.name = "xgb"
         self.task_type = task_type
@@ -282,7 +287,7 @@ class XGBoostModel(BaseModel):
             params["objective"] = "binary:logistic"
             params["eval_metric"] = "logloss"
         elif self.task_type == "multiclass":
-            params["objective"] = "multi:softmax"
+            params["objective"] = "multi:softprob"
             params["eval_metric"] = "mlogloss"
         else:
             params["objective"] = "reg:squarederror"
@@ -337,13 +342,22 @@ class CatBoostModel(BaseModel):
         task_type: str = "regression",
         cat_features: Optional[List[str]] = None,
         early_stopping_rounds: int = 100,
+        mode: str = "native",
+        seed: int = 42,
     ) -> None:
         merged = {**self._DEFAULT_PARAMS, **(params or {})}
+        merged["random_seed"] = seed
         super().__init__(merged)
         self.name = "catboost"
         self.task_type = task_type
-        self.cat_features = cat_features or []
+        self.mode = mode
         self.early_stopping_rounds = early_stopping_rounds
+        
+        if self.mode == "numeric" and cat_features:
+            logger.warning("CatBoostModel: mode='numeric', but cat_features provided. Ignoring cat_features.")
+            self.cat_features = []
+        else:
+            self.cat_features = cat_features or []
 
     def _fit(self, X_train, y_train, X_val, y_val, sample_weight) -> "CatBoostModel":
         try:
@@ -390,8 +404,11 @@ class LinearModel(BaseModel):
         self,
         params: Optional[Dict[str, Any]] = None,
         task_type: str = "regression",
+        seed: int = 42,
     ) -> None:
-        super().__init__(params or {"alpha": 1.0})
+        merged = params or {"alpha": 1.0}
+        merged["random_state"] = seed
+        super().__init__(merged)
         self.name = "linear"
         self.task_type = task_type
 
@@ -432,6 +449,7 @@ def build_model(
     name: str,
     params: Optional[Dict[str, Any]] = None,
     task_type: str = "regression",
+    seed: int = 42,
     **kwargs: Any,
 ) -> BaseModel:
     """
@@ -445,6 +463,8 @@ def build_model(
         Hyperparameter overrides.
     task_type : str
         "regression" | "binary" | "multiclass"
+    seed : int
+        Random seed for reproducibility.
     **kwargs
         Extra arguments forwarded to the model constructor.
 
@@ -460,5 +480,5 @@ def build_model(
         )
     cls = _MODEL_REGISTRY[name]
     if name in ("lgbm", "lightgbm", "xgb", "xgboost", "catboost", "linear"):
-        return cls(params=params, task_type=task_type, **kwargs)
+        return cls(params=params, task_type=task_type, seed=seed, **kwargs)
     return cls(**kwargs)

@@ -27,11 +27,15 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.base import BaseEstimator, TransformerMixin
 import scipy.sparse as sp
 
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+class LeakageGuardError(ValueError):
+    """Raised when a feature function that requires training statistics is called without a training reference."""
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -200,13 +204,10 @@ def categorical_features(
     categorical_cols: List[str],
     train_df: Optional[pd.DataFrame] = None,
     prefix: str = "cat",
+    require_train_ref: bool = True,
 ) -> pd.DataFrame:
     """
     Frequency-based categorical features.
-
-    IMPORTANT: Frequency statistics are computed from train_df only
-    (or from df itself if train_df is None — safe when called inside
-    a fold with only training data).
 
     Parameters
     ----------
@@ -217,11 +218,22 @@ def categorical_features(
         Reference DataFrame for frequency computation.
         MUST be the training fold, not the full dataset.
     prefix : str
+    require_train_ref : bool
+        If True, raises LeakageGuardError when train_df is None.
+        Set to False ONLY when you explicitly want to compute statistics
+        on `df` itself (e.g. during a proper .fit() call on training data).
 
     Returns
     -------
     pd.DataFrame
     """
+    if train_df is None and require_train_ref:
+        raise LeakageGuardError(
+            "categorical_features() was called without train_df while require_train_ref=True. "
+            "This prevents accidental leakage of validation/test distributions into feature generation. "
+            "Pass train_df explicitly."
+        )
+
     ref = train_df if train_df is not None else df
     feats: Dict[str, pd.Series] = {}
 
@@ -315,7 +327,8 @@ def create_features(
     include_text_structured: bool = True,
 ) -> pd.DataFrame:
     """
-    Master feature creation pipeline.
+    LEGACY master feature creation pipeline.
+    Use `FeaturePipeline` instead for a proper stateful `.fit()` / `.transform()` API.
 
     Call this inside each CV fold:
         - train_df = train fold only (for frequency/count statistics)
@@ -353,7 +366,12 @@ def create_features(
 
     # Categorical
     if categorical_cols:
-        frames.append(categorical_features(df, categorical_cols, train_df=train_df))
+        frames.append(categorical_features(
+            df,
+            categorical_cols,
+            train_df=train_df,
+            require_train_ref=False if train_df is None else True
+        ))
 
     # Text structured
     if text_cols and include_text_structured:
@@ -377,3 +395,65 @@ def create_features(
 
     logger.info("create_features: output shape = %s", result.shape)
     return result
+
+
+# ─────────────────────────────────────────────────────────────────
+# FEATURE PIPELINE (STATEFUL)
+# ─────────────────────────────────────────────────────────────────
+class FeaturePipeline(BaseEstimator, TransformerMixin):
+    """
+    Stateful feature pipeline enforcing the train-fit / validation-transform paradigm.
+    Eliminates the possibility of leaking val/test distributions.
+    """
+    def __init__(
+        self,
+        numeric_cols: Optional[List[str]] = None,
+        categorical_cols: Optional[List[str]] = None,
+        text_cols: Optional[List[str]] = None,
+        log_cols: Optional[List[str]] = None,
+        ratio_pairs: Optional[List[Tuple[str, str]]] = None,
+        interaction_pairs: Optional[List[Tuple[str, str]]] = None,
+        include_text_structured: bool = True,
+    ) -> None:
+        self.numeric_cols = numeric_cols or []
+        self.categorical_cols = categorical_cols or []
+        self.text_cols = text_cols or []
+        self.log_cols = log_cols
+        self.ratio_pairs = ratio_pairs
+        self.interaction_pairs = interaction_pairs
+        self.include_text_structured = include_text_structured
+
+        # State storage
+        self._is_fitted = False
+        self._train_df: Optional[pd.DataFrame] = None
+
+    def fit(self, X: pd.DataFrame, y=None) -> "FeaturePipeline":
+        """
+        Fit the feature pipeline.
+        Saves a reference to the training data to compute categorical statistics.
+        """
+        self._train_df = X.copy(deep=False)
+        self._is_fitted = True
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        """
+        Transform the dataset using statistics learned during fit().
+        """
+        if not self._is_fitted:
+            raise RuntimeError("FeaturePipeline must be fitted before calling transform().")
+
+        return create_features(
+            df=X,
+            numeric_cols=self.numeric_cols,
+            categorical_cols=self.categorical_cols,
+            text_cols=self.text_cols,
+            train_df=self._train_df,
+            log_cols=self.log_cols,
+            ratio_pairs=self.ratio_pairs,
+            interaction_pairs=self.interaction_pairs,
+            include_text_structured=self.include_text_structured,
+        )
+
+    def fit_transform(self, X: pd.DataFrame, y=None) -> pd.DataFrame:
+        return self.fit(X, y).transform(X)

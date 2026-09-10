@@ -137,17 +137,15 @@ def make_splits(
             splits.append(_make_si(fold, tr, va, strategy))
 
     elif strategy == "timeseries":
-        # Sort data chronologically
-        sorted_idx = df.sort_values(time_col).index.values
-        df_sorted_pos = {orig_idx: pos for pos, orig_idx in enumerate(sorted_idx)}
-        pos_arr = np.array([df_sorted_pos[i] for i in df.index])
+        # Sort data chronologically (stable sort)
+        order = df.sort_values(time_col, kind="mergesort").index.to_numpy()
 
         tss = TimeSeriesSplit(n_splits=n_folds)
-        for fold, (tr_pos, va_pos) in enumerate(tss.split(pos_arr)):
-            # Map positions back to original dataframe positions
-            tr_orig = np.where(np.isin(pos_arr, tr_pos))[0]
-            va_orig = np.where(np.isin(pos_arr, va_pos))[0]
-            splits.append(_make_si(fold, tr_orig, va_orig, strategy))
+        for fold, (tr_pos, va_pos) in enumerate(tss.split(order)):
+            # tr_pos and va_pos are positional indices into the `order` array
+            tr_idx = order[tr_pos]
+            va_idx = order[va_pos]
+            splits.append(_make_si(fold, tr_idx, va_idx, strategy))
 
     elif strategy == "holdout":
         if group_col:

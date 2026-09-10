@@ -90,29 +90,64 @@ class DiscoveredFiles:
         return "\n".join(lines)
 
 
-def _score_train_likelihood(path: Path) -> float:
-    """Return a heuristic likelihood [0, 1] that a file is the train set."""
-    stem = path.stem.lower()
-    score = 0.0
-    if any(kw in stem for kw in TRAIN_KEYWORDS):
-        score += 1.0
-    if any(kw in stem for kw in TEST_KEYWORDS):
-        score -= 0.8
-    if "sample" in stem or "submission" in stem:
-        score -= 1.0
-    return score
+SUBMISSION_KEYWORDS = {"sample_submission", "submission_sample", "submission"}
 
 
-def _score_test_likelihood(path: Path) -> float:
+def _score_candidate(
+    path: Path,
+    all_tabular: List[Path],
+) -> Dict[str, Any]:
+    """
+    Score a tabular file as a train/test/submission candidate.
+
+    Returns a dict with:
+      train_score, test_score, submission_score, confidence descriptors.
+
+    Scoring factors:
+      - Filename keyword match (primary signal)
+      - "sample" prefix (strong indicator of sample_submission)
+      - File size (train is usually the largest tabular file)
+      - Not a known submission file (adjusts test/train scores down)
+    """
     stem = path.stem.lower()
-    score = 0.0
-    if any(kw in stem for kw in TEST_KEYWORDS):
-        score += 1.0
-    if "sample_submission" in stem or "submission" in stem:
-        score += 0.3
-    if any(kw in stem for kw in TRAIN_KEYWORDS):
-        score -= 0.8
-    return score
+    size = path.stat().st_size if path.exists() else 0
+    max_size = max((p.stat().st_size for p in all_tabular if p.exists()), default=1)
+    size_ratio = size / max(max_size, 1)
+
+    train_score = 0.0
+    test_score  = 0.0
+    sub_score   = 0.0
+
+    # Strong keyword signals
+    if any(kw == stem or kw in stem for kw in TRAIN_KEYWORDS):
+        train_score += 1.0
+    if any(kw == stem or kw in stem for kw in TEST_KEYWORDS - {"val", "valid", "validation", "eval"}):
+        test_score += 1.0
+    if any(kw == stem or kw in stem for kw in {"val", "valid", "validation", "eval"}):
+        # validation files could be either train-like or test-like
+        train_score += 0.3
+        test_score  += 0.3
+
+    # Submission signals
+    if "submission" in stem:
+        sub_score   += 1.0
+        train_score -= 1.0
+        test_score  -= 0.5
+    if "sample" in stem:
+        sub_score   += 0.5
+        train_score -= 0.5
+
+    # Size heuristic: train is usually the biggest file
+    train_score += 0.4 * size_ratio
+    test_score  += 0.2 * (1.0 - size_ratio)   # test tends to be smaller
+
+    return {
+        "path":         path,
+        "train_score":  round(train_score, 3),
+        "test_score":   round(test_score, 3),
+        "sub_score":    round(sub_score, 3),
+        "size_bytes":   size,
+    }
 
 
 def discover_files(root: Union[str, Path]) -> DiscoveredFiles:
@@ -167,25 +202,35 @@ def discover_files(root: Union[str, Path]) -> DiscoveredFiles:
         else:
             result.other.append(p)
 
-    # ── Heuristic guesses ────────────────────────────────────────
-    scored_tabular = [(p, _score_train_likelihood(p), _score_test_likelihood(p))
-                      for p in tabular_paths]
+    # ── Score and rank all tabular files ─────────────────────────
+    scored = [_score_candidate(p, tabular_paths) for p in tabular_paths]
 
     train_candidates = sorted(
-        [(p, ts) for p, ts, _ in scored_tabular if ts > 0],
-        key=lambda x: x[1], reverse=True,
+        [s for s in scored if s["train_score"] > 0],
+        key=lambda s: s["train_score"], reverse=True,
     )
     test_candidates = sorted(
-        [(p, ts) for p, _, ts in scored_tabular if ts > 0],
-        key=lambda x: x[1], reverse=True,
+        [s for s in scored if s["test_score"] > 0],
+        key=lambda s: s["test_score"], reverse=True,
+    )
+    sub_candidates = sorted(
+        [s for s in scored if s["sub_score"] > 0.5],
+        key=lambda s: s["sub_score"], reverse=True,
     )
 
-    result.probable_train = [p for p, _ in train_candidates[:2]]
-    result.probable_test  = [p for p, _ in test_candidates[:2]]
-    result.probable_submission = [
-        p for p in tabular_paths
-        if "submission" in p.stem.lower() and "sample" in p.stem.lower()
-    ]
+    result.probable_train      = [s["path"] for s in train_candidates[:2]]
+    result.probable_test       = [s["path"] for s in test_candidates[:2]
+                                  if s["path"] not in result.probable_train]
+    result.probable_submission = [s["path"] for s in sub_candidates[:2]]
+
+    # Log with confidence descriptors
+    for s in train_candidates[:2]:
+        logger.info("Candidate TRAIN: %s (score=%.2f)", s["path"].name, s["train_score"])
+    for s in test_candidates[:2]:
+        if s["path"] not in result.probable_train:
+            logger.info("Candidate TEST:  %s (score=%.2f)", s["path"].name, s["test_score"])
+    for s in sub_candidates[:2]:
+        logger.info("Candidate SUBMISSION: %s (score=%.2f)", s["path"].name, s["sub_score"])
 
     logger.info(result.summary())
     return result
@@ -357,8 +402,26 @@ def load_zip(
         return pd.read_parquet(buf, **kwargs)
     elif loader == "json":
         return pd.read_json(buf, **kwargs)
+    elif loader == "jsonl":
+        # JSONL is not directly supported by pd.read_json with BytesIO reliably;
+        # decode and parse line-by-line.
+        text = buf.read().decode("utf-8", errors="replace")
+        records: List[Dict[str, Any]] = []
+        for i, line in enumerate(text.splitlines()):
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"Invalid JSON on line {i+1} inside ZIP '{path}': {exc}"
+                    ) from exc
+        return pd.DataFrame(records)
     else:
-        raise ValueError(f"Unsupported loader for ZIP: '{loader}'")
+        raise ValueError(
+            f"Unsupported loader for ZIP: '{loader}'. "
+            "Choose from: csv | parquet | json | jsonl"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────

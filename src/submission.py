@@ -84,6 +84,9 @@ def postprocess_predictions(
     -------
     np.ndarray
     """
+    if log_inverse and expm1:
+        raise ValueError("Cannot specify both log_inverse=True and expm1=True. Choose one.")
+
     preds = predictions.copy().astype(np.float64)
 
     if log_inverse:
@@ -163,6 +166,9 @@ def validate_submission(
 
     preds = submission_df[prediction_column]
 
+    is_numeric = pd.api.types.is_numeric_dtype(preds)
+    checks.append(_check("Predictions are numeric", is_numeric, f"Dtype is {preds.dtype}"))
+
     # 2. No NaN
     n_nan = preds.isna().sum()
     checks.append(_check("No NaN predictions", n_nan == 0, f"{n_nan} NaN values"))
@@ -190,10 +196,13 @@ def validate_submission(
 
     # 6. ID alignment
     if test_ids is not None:
-        sub_ids  = set(submission_df[id_column].astype(str))
-        test_set = set(test_ids.astype(str))
-        missing  = test_set - sub_ids
-        extra    = sub_ids - test_set
+        sub_ids_list = submission_df[id_column].astype(str).tolist()
+        test_ids_list = test_ids.astype(str).tolist()
+        
+        sub_ids_set  = set(sub_ids_list)
+        test_set = set(test_ids_list)
+        missing  = test_set - sub_ids_set
+        extra    = sub_ids_set - test_set
         checks.append(_check(
             "All test IDs present in submission",
             len(missing) == 0,
@@ -203,6 +212,11 @@ def validate_submission(
             "No extra IDs in submission",
             len(extra) == 0,
             f"{len(extra)} extra IDs",
+        ))
+        checks.append(_check(
+            "ID order matches test set",
+            sub_ids_list == test_ids_list,
+            "Submission ID order differs from test set",
         ))
 
     # 7. Range check
@@ -343,6 +357,9 @@ def write_submission(
         id_column=id_column,
         prediction_column=prediction_column,
         expected_row_count=expected_row_count,
+        clip_min=clip_min,
+        clip_max=clip_max,
+        test_ids=test_ids,
     )
     if not final_pass:
         raise RuntimeError("Submission re-validation after write FAILED — do not submit this file.")

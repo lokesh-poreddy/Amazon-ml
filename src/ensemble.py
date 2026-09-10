@@ -73,16 +73,16 @@ def oof_correlation_matrix(candidates: List[OOFCandidate]) -> pd.DataFrame:
     return pd.DataFrame(corr, index=names, columns=names)
 
 
-def select_diverse_candidates(
+def score_weighted_selection(
     candidates: List[OOFCandidate],
     metric_spec: MetricSpec,
     y_true: np.ndarray,
     correlation_threshold: float = 0.98,
 ) -> List[OOFCandidate]:
     """
-    Greedily select candidates that are:
-      1. Above a minimum quality threshold
-      2. Below a pairwise correlation threshold with already-selected candidates
+    Greedily select candidates that:
+      1. Improve the actual simple blend score over the already-selected candidates
+      2. Fall below a pairwise correlation threshold with already-selected candidates
 
     Parameters
     ----------
@@ -106,11 +106,15 @@ def select_diverse_candidates(
     )
 
     selected: List[OOFCandidate] = []
+    current_blend_score = None
+
     for candidate in scored:
         if not selected:
             selected.append(candidate)
+            current_blend_score = candidate.oof_score
             logger.info("Ensemble: SELECT '%s' (score=%.6f) [first]", candidate.name, candidate.oof_score)
             continue
+            
         max_corr = max(
             abs(np.corrcoef(candidate.oof_predictions, s.oof_predictions)[0, 1])
             for s in selected
@@ -120,12 +124,29 @@ def select_diverse_candidates(
                 "Ensemble: REJECT '%s' (score=%.6f, max_corr=%.4f > threshold=%.4f)",
                 candidate.name, candidate.oof_score, max_corr, correlation_threshold,
             )
-        else:
+            continue
+
+        # Evaluate marginal blend improvement
+        new_blend_preds = np.mean([s.oof_predictions for s in selected] + [candidate.oof_predictions], axis=0)
+        new_blend_score = metric_spec(y_true, new_blend_preds)
+        
+        improved = (
+            (metric_spec.direction == "minimize" and new_blend_score < current_blend_score) or
+            (metric_spec.direction == "maximize" and new_blend_score > current_blend_score)
+        )
+        
+        if improved:
             logger.info(
-                "Ensemble: SELECT '%s' (score=%.6f, max_corr=%.4f)",
-                candidate.name, candidate.oof_score, max_corr,
+                "Ensemble: SELECT '%s' (score=%.6f, max_corr=%.4f, blend %.6f -> %.6f)",
+                candidate.name, candidate.oof_score, max_corr, current_blend_score, new_blend_score
             )
             selected.append(candidate)
+            current_blend_score = new_blend_score
+        else:
+            logger.info(
+                "Ensemble: REJECT '%s' (score=%.6f, max_corr=%.4f, NO BLEND IMPROVEMENT %.6f -> %.6f)",
+                candidate.name, candidate.oof_score, max_corr, current_blend_score, new_blend_score
+            )
 
     return selected
 
@@ -147,7 +168,7 @@ def weighted_avg(test_preds_list: List[np.ndarray], weights: List[float]) -> np.
     return (arr * w[:, None]).sum(axis=0)
 
 
-def rank_avg(test_preds_list: List[np.ndarray]) -> np.ndarray:
+def rank_avg(test_preds_list: List[np.ndarray], y_ref: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Rank-average (Boruta-style):
       1. Rank predictions within each model
@@ -155,9 +176,18 @@ def rank_avg(test_preds_list: List[np.ndarray]) -> np.ndarray:
       3. Optionally re-scale back to original range
 
     Robust to scale differences between models.
+    
+    WARNING: Unsuitable for raw regression if y_ref is None, as it returns [0, 1] fractions.
+    Provide y_ref (e.g., training targets) to rescale to [min(y_ref), max(y_ref)].
     """
     ranked = [rankdata(p) / len(p) for p in test_preds_list]
-    return np.stack(ranked, axis=0).mean(axis=0)
+    avg_rank = np.stack(ranked, axis=0).mean(axis=0)
+    
+    if y_ref is not None:
+        y_min, y_max = np.min(y_ref), np.max(y_ref)
+        avg_rank = y_min + avg_rank * (y_max - y_min)
+        
+    return avg_rank
 
 
 def optimise_weights(

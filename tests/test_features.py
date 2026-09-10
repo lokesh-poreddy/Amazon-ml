@@ -109,7 +109,7 @@ def test_numeric_features_ratio(product_df: pd.DataFrame) -> None:
 # CATEGORICAL FEATURES
 # ─────────────────────────────────────────────────────────────────
 def test_categorical_features_freq_encoding(product_df: pd.DataFrame) -> None:
-    feats = categorical_features(product_df, categorical_cols=["category"])
+    feats = categorical_features(product_df, categorical_cols=["category"], train_df=product_df)
     freq_col = [c for c in feats.columns if "freq" in c]
     assert len(freq_col) > 0
     # All values should be in [0, 1]
