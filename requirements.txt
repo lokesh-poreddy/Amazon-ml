@@ -1,5 +1,5 @@
 # ============================================================
-# Amazon ML Challenge 2026 — Python Dependencies
+# Amazon ML Challenge 2026 — Entity Resolution Engine
 # ============================================================
 # CORE (required)
 # ============================================================
@@ -8,36 +8,27 @@ pandas>=2.0
 scikit-learn>=1.3
 scipy>=1.11
 pyyaml>=6.0
-requests>=2.31
 tqdm>=4.66
-python-dotenv>=1.0
 psutil>=5.9
 
 # ============================================================
-# GRADIENT BOOSTING (install at least one)
+# STRING SIMILARITY
+# ============================================================
+rapidfuzz>=3.5                 # Fast string similarity
+python-Levenshtein>=0.25       # Levenshtein backend
+
+# ============================================================
+# GRADIENT BOOSTING (pair scoring models)
 # ============================================================
 lightgbm>=4.0
 xgboost>=2.0
 catboost>=1.2
 
 # ============================================================
-# DATA FORMATS
+# SERIALIZATION
 # ============================================================
-pyarrow>=13.0          # Parquet support
-fastparquet>=2023.0
-
-# ============================================================
-# VISUALISATION
-# ============================================================
-matplotlib>=3.7
-seaborn>=0.12
-
-# ============================================================
-# JUPYTER
-# ============================================================
-jupyterlab>=4.0
-ipywidgets>=8.0
-nbformat>=5.9
+joblib>=1.3
+pyarrow>=13.0
 
 # ============================================================
 # TESTING
@@ -46,33 +37,26 @@ pytest>=7.4
 pytest-cov>=4.1
 
 # ============================================================
-# OPTIONAL — TEXT / EMBEDDINGS
-# install manually when the competition confirms text data
+# VISUALISATION (analysis notebooks)
+# ============================================================
+matplotlib>=3.7
+seaborn>=0.12
+
+# ============================================================
+# JUPYTER (notebooks only)
+# ============================================================
+jupyterlab>=4.0
+ipywidgets>=8.0
+nbformat>=5.9
+
+# ============================================================
+# OPTIONAL — EMBEDDINGS (Phase 5+)
 # ============================================================
 # sentence-transformers>=2.2
 # transformers>=4.35
-# tokenizers>=0.14
 
 # ============================================================
-# OPTIONAL — IMAGES
-# install manually when the competition confirms image data
+# OPTIONAL — GRAPH NEURAL NETWORKS (Phase 6+)
 # ============================================================
-# Pillow>=10.0
 # torch>=2.0
-# torchvision>=0.15
-# open-clip-torch>=2.23
-
-# ============================================================
-# OPTIONAL — HYPERPARAMETER SEARCH
-# ============================================================
-# optuna>=3.3
-
-# ============================================================
-# OPTIONAL — EXPERIMENT TRACKING
-# ============================================================
-# mlflow>=2.8
-
-# ============================================================
-# OPTIONAL — SHAP EXPLANATIONS
-# ============================================================
-# shap>=0.43
+# torch_geometric>=2.4

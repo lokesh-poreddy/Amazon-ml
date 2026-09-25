@@ -1,0 +1,96 @@
+# ============================================================
+# Entity Resolution Engine Configuration
+# ============================================================
+
+project:
+  name: "Amazon ML Challenge 2026"
+  objective: "Business Entity Resolution"
+  metric: "macro_entity_f05"
+  seed: 42
+
+# ============================================================
+# DATA PATHS (relative to project root)
+# ============================================================
+data:
+  s1_path: "data/raw/source1.tsv"
+  s2_path: "data/raw/source2.tsv"
+  s3_path: "data/raw/source3.tsv"
+  ground_truth_path: "data/raw/ground_truth.tsv"
+  test_s1_path: "data/raw/test_source1.tsv"
+  test_s2_path: "data/raw/test_source2.tsv"
+  test_s3_path: "data/raw/test_source3.tsv"
+
+# ============================================================
+# BLOCKING — Candidate Generation
+# ============================================================
+blocking:
+  # Enable/disable individual blockers
+  use_exact_name: true
+  use_compact_name: true
+  use_token_name: true
+  use_rare_token: true
+  use_postal: true
+  use_name_country: true
+  use_address_token: true
+  use_char_ngram: false    # Enable for Phase 2+
+  use_tfidf: false         # Enable for Phase 2+
+  use_fuzzy: false         # Enable for Phase 3+
+
+  # Blocker parameters
+  token_min_shared: 1
+  rare_token_max_df: 10
+  address_min_shared: 2
+  char_ngram_top_k: 50
+  tfidf_top_k: 30
+  fuzzy_top_k: 20
+
+# ============================================================
+# MATCHING — Pair Scoring Model
+# ============================================================
+matching:
+  scorer: "rule_based"     # rule_based | lightgbm | catboost | xgboost
+  model_params:
+    n_estimators: 1000
+    learning_rate: 0.05
+    num_leaves: 63
+
+  # Training
+  n_folds: 5
+  neg_ratio: 3
+  hard_neg_ratio: 2
+  early_stopping_rounds: 100
+
+# ============================================================
+# DECISION — Entity Resolution
+# ============================================================
+decision:
+  match_threshold: 0.50
+  multi_match_threshold: 0.60
+  multi_match_gap: 0.10
+  max_matches: 0           # 0 = unlimited
+
+  # Threshold optimization range
+  optimize_thresholds:
+    start: 0.10
+    end: 0.95
+    step: 0.01
+
+# ============================================================
+# OUTPUT
+# ============================================================
+output:
+  submission_dir: "submission/output"
+  artifacts_dir: "artifacts"
+  models_dir: "artifacts/models"
+  features_dir: "artifacts/features"
+  logs_dir: "logs"
+  max_submissions_per_day: 5
+
+# ============================================================
+# PERFORMANCE
+# ============================================================
+performance:
+  n_jobs: -1               # All cores
+  batch_size: 500
+  max_memory_mb: 8192      # 8 GB cap
+  enable_profiling: false
